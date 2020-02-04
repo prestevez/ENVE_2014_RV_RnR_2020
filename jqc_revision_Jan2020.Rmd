@@ -1,0 +1,1376 @@
+---
+title: | 
+  Are repeatedly extorted businesses different? A multilevel hurdle model of extortion
+  victimization: RnR analyses
+author: 
+  - "Patricio R. Estévez Soto"
+  - "Shane D. Johnson"
+  - "Nick Tilley"
+email: "patricio.estevez@ucl.ac.uk"
+date: "`r Sys.Date()`"
+output:
+  md_document:
+    variant: "markdown"
+pandoc_args: "--smart"
+---
+
+# Introdution
+
+Script to conduct analyses required to resubmit a revised version of manuscript.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      comment="",
+                      cache=TRUE,
+                      dev=c("png", "CairoPDF"),
+                      error=TRUE,
+                      fig.width=6, fig.height=5)
+options(knitr.kable.NA = '--')
+```
+
+# Set up
+
+To ensure reproducibility and aid in debugging, we first start setting up options and printing the information about the R session.
+
+```{r session, cache=FALSE}
+starttime <- proc.time()
+date()
+sessionInfo()
+set.seed(42)
+options(scipen=0)
+
+```
+
+
+
+Next we load the packages that will be used in the analysis. The installation of these packages should have already been done before. Additionally, we'll import some functions that are required, without importing the entire packages.
+
+```{r packages}
+library(victim)
+library(tidyverse)
+library(downloader)
+library(lmtest)
+library(magrittr)
+library(glmmTMB)
+library(lazyeval)
+library(glmmADMB)
+#library(texreg)
+# library(arsenal)
+# library(bbmle)
+# library(gridExtra)
+library(parallel)
+library(ggthemes)
+
+# install.packages("pbapply")
+library(pbapply)
+
+# library(boot)
+
+
+read.dbf <- foreign::read.dbf
+kable <- knitr::kable
+melt <- reshape2::melt
+select <- dplyr::select
+Anova <- car::Anova
+ks.test <- dgof::ks.test
+
+
+
+sessionInfo()
+
+# Create csv dir for model results
+dir.create("coef_results")
+
+```
+
+
+Next we load some custom functions. Ideally these should be in a separate stand-alone package, but I have not had the time to create such package.
+
+```{r functions}
+
+mylog <- function(x, center = FALSE){
+    if(min(x) <= 0) {tlog <- log1p}
+    else {tlog <- log}
+
+    logx <- tlog(x)
+
+    if(isTRUE(center))
+    {
+        logx <- logx - tlog(mean(x))
+    }
+
+    if(is.numeric(center)){
+        logx <- logx - tlog(center)
+    }
+
+    return(logx)
+
+}
+
+mkbin <- function(x,n = 0) ifelse(x > n, 1, 0)
+
+capadjust <- function(x, y, K = 0) x/(K-y)
+
+# Unconditional truncated means
+
+tnb_mean <- function(mu, alpha) mu/(1-(1+alpha*mu)^(-1/alpha))
+tp_mean <- function(mu) mu/(1-exp(-mu))
+
+
+countsummary <- function(model){
+    print(summary(model))
+    print(confint(model))
+    sgm <- sigma(model)
+
+    if(length(sgm) == 0){
+        sgm <- model$alpha
+    }
+    cat("\n\nAlpha: \n")
+    print(1/sgm)
+    cat("\nLog-likelihood: \n")
+    print(logLik(model))
+    cat("\n")
+    print(car::Anova(model))
+    print(lrtest(model))
+    print(car::vif(model))
+}
+
+compare_nested <- function(...) {
+    print(AICtab(...))
+    print(lrtest(...))
+}
+
+
+### Function to extract model coefficients to csv
+## Should work for glmmTMB and glmmADMB models
+
+coef_csv <- function(model, dir = "coef_results/"){
+    if(class(model) == "glmmTMB"){
+        coefs1 <- fixef(model)$cond
+        ses1 <- sqrt(diag(vcov(model)$cond))
+    } else{
+        coefs1 <- coef(model)
+        ses1 <- sqrt(diag(vcov(model)))
+    }
+    ncoefs1 <- length(coefs1)
+    ses1 <- ses1[1:ncoefs1]
+
+    confints1 <- confint(model)
+
+    confints1 <- confints1[1:ncoefs1,1:2]
+
+    mat <- cbind(coefs1,ses1,confints1)
+    colnames(mat) <- c("Estimate", "SE", "CI_low", "CI_high")
+
+    mname <- deparse(substitute(model))
+
+    filename <- paste0(dir, mname, ".csv")
+
+    write.csv(mat, file = filename)
+
+    message("\nFile: '", filename, "' successfully writen!\n")
+
+}
+
+```
+
+
+# Data input and processing
+
+We first load and arrange the area and victim level data.
+
+As the script is designed to be run remotely, when working locally during development, testing data needs to be downloaded from github. To download the testing data, the script uses an Rmarkdown parameter (`params$test`). The parameter is set to `FALSE` by default, so that it runs seamlessly using the `render` command when running in the remote research settings. For running correctly in a testing setting, the parameter must be given a `TRUE` value when running the knit command (`rmarkdown::render('ENVE_rv_ext_type.Rmd', params = list(test = TRUE))`). When using `knitr`, no parameter is passed, so the following gives an error. This is expected behaviour.
+
+```{r testing}
+#params <- list(test = TRUE)
+if(params$test){
+    download("https://raw.githubusercontent.com/prestevez/datahouse/master/enve2014cuest_ciega_2014.dbf",
+                      destfile = "enve2014cuest_ciega_2014.dbf", mode = "wb")
+}
+
+```
+
+Next we explore what files are available in the working directory.
+
+```{r files}
+
+list.files()
+
+```
+
+Next we input the additional data needed for the analysis currently saved in Github.
+
+```{r GH-data}
+
+cat_entidades <- read.csv("https://raw.githubusercontent.com/prestevez/datahouse/master/cat_entidades.csv", head=TRUE)
+state_level_data <- read.csv("https://raw.githubusercontent.com/prestevez/datahouse/master/state_level_data_2013.csv", header=TRUE)
+state_level_data <- merge(state_level_data,
+                          cat_entidades, by="CVE_ENT", all.x=TRUE)
+scode <- read.csv("https://raw.githubusercontent.com/prestevez/datahouse/master/secode.csv", head=TRUE)
+scode$Code <- scode$Code*10000
+
+
+```
+
+Calculate the national means of the state-level variables used in the models.
+
+```{r state-level-means}
+
+mean_bribes <- mean(state_level_data$bribes_abvic)
+mean_bribes
+
+mean_armas <- mean(state_level_data$armas)
+mean_armas
+
+mean_drogas <- mean(state_level_data$drogas)
+mean_drogas
+
+mean_poblacion <- mean(state_level_data$poblacion)
+mean_poblacion
+
+mean_N <- mean(state_level_data$N)
+mean_N
+
+mean_General <- mean(state_level_data$General)
+mean_General
+
+mean_Derecho <- mean(state_level_data$Derecho)
+mean_Derecho
+
+
+```
+
+Now we are ready to input the victim-level data.
+
+```{r victim-level-import}
+enve_all <- read.dbf("enve2014cuest_ciega_2014.dbf")
+
+```
+
+To prepare the data for analysis we select only the variables that are used in the analysis.
+
+```{r victim-level-processing}
+
+enve_test <- data.frame(extortions=as.integer(as.character(enve_all$P26_10)))
+
+enve_test$extortion_victim <- enve_all$P25_10
+enve_test$extortions[enve_test$extortion_victim == 2] <- 0
+summary(enve_test$extortions)
+table(enve_test$extortions)
+
+enve_test$extortions[is.na(enve_test$extortions)] <- 0
+
+summary(enve_test$extortions)
+table(enve_test$extortions)
+
+
+enve_test$rep_extortion_victim <- mkbin(enve_test$extortions, 1)
+#enve_test$rep_extortion_victim <- factor(enve_test$extortions)
+#levels(enve_test$rep_extortion_victim) <- c(0, 0,
+#                    rep(1, length(levels(enve_test$rep_extortion_victim)) - 2))
+
+table(enve_test$rep_extortion_victim)
+
+enve_test$rep_extortions <- enve_test$extortions
+enve_test$rep_extortions[enve_test$rep_extortions > 0] <- enve_test$rep_extortions[enve_test$rep_extortions > 0] - 1
+
+summary(enve_test$rep_extortions)
+table(enve_test$rep_extortions)
+
+
+enve_test$CVE_UNICA <- as.integer(as.character(enve_all$ID_CONSECU))
+
+enve_test$bribes <- as.integer(as.character(enve_all$P33))
+summary(enve_test$bribes)
+
+# 4 bribe cats
+enve_test$bribe1 <- enve_all$P29_1
+enve_test$bribe2 <- enve_all$P30_1
+enve_test$bribe3 <- enve_all$P31_1
+enve_test$bribe4 <- enve_all$P32_1
+
+enve_test$bribes[with(enve_test,
+                        bribe1 == 2 &
+                        bribe2 == 2 &
+                        bribe3 == 2 &
+                        bribe4 == 2)] <- 0
+
+summary(enve_test$bribes)
+
+enve_test$bribes[is.na(enve_test$bribes)] <- 0
+
+enve_test$bribe_victim <- mkbin(enve_test$bribes, 0)
+
+table(enve_test$bribe_victim)
+
+enve_test$rep_bribe <- mkbin(enve_test$bribes, 1)
+
+table(enve_test$rep_bribe)
+
+enve_test$bribe_cats <- factor(enve_test$bribes)
+levels(enve_test$bribe_cats) <- c(0, 1, 2, rep("3+",
+                                            length(levels(enve_test$bribe_cats)) - 3))
+summary(enve_test$bribe_cats)
+
+enve_test$CVE_ENT <- as.integer(as.character(enve_all$CVE_ENT))
+
+enve_test$size <- enve_all$ID_ESTRATO
+levels(enve_test$size) <- c("Large", "Medium", "Small", "Micro")
+
+enve_test$sector <- enve_all$SECTOR_FIN
+
+# subsector
+enve_test$tempsub <- as.integer(as.character(enve_all$P1_1B))
+enve_test$subsector <- cut(enve_test$tempsub, scode$Code, right=FALSE)
+levels(enve_test$subsector) <- scode$Sector
+enve_test$subsector <- droplevels(enve_test$subsector)
+enve_test$subsector <- relevel(enve_test$subsector, ref="Retail")
+levels(enve_test$subsector)
+
+enve_test$subsector_safe <- enve_test$subsector
+
+# Merge utilities and construction in "other industry" category
+
+enve_test$subsector %>%
+  fct_collapse("Other industry" = c("Mining", "Construction")) %>%
+  fct_relevel("Other industry", after = 3) -> enve_test$subsector
+
+levels(enve_test$subsector)[17] <- "Other services"
+
+levels(enve_test$subsector)
+
+enve_test$years <- 2013 - as.numeric(as.character(enve_all$P3))
+summary(enve_test$years)
+
+intyears <- classInt::classIntervals(enve_test$years, 5, style="quantile")
+enve_test$yearsquant <- cut(enve_test$years, intyears$brks, right=TRUE,
+                            include.lowest = TRUE)
+
+enve_test <- merge(enve_test, state_level_data, by="CVE_ENT", all.x=TRUE)
+
+length(enve_test$extortions[is.na(enve_test$extortions)])
+length(enve_test$bribes[is.na(enve_test$bribes)])
+
+## enve_test$extortions[is.na(enve_test$extortions)] <- 0
+## enve_test$bribes[is.na(enve_test$bribes)] <- 0
+
+summary(enve_test)
+
+# Exclude Corporate and Utilitites
+
+nrow(enve_test) # should be 28179
+
+enve_test %>%
+    filter(!subsector %in% c("Utilities", "Corporate")) -> enve_test_2
+
+enve_test_2$subsector <- droplevels(enve_test_2$subsector)
+
+levels(enve_test_2$subsector)
+
+enve_test_2$subsector_safe <- droplevels(enve_test_2$subsector_safe)
+levels(enve_test_2$subsector_safe)
+
+nrow(enve_test_2) # should be 28161
+
+enve_test <- enve_test_2
+nrow(enve_test)
+
+summary(enve_test)
+```
+
+
+# EDA
+
+Re-do some of the EDA
+
+## Univariate extortion analysis
+
+Distribution, lorenz plots and poisson tests for the aggregated extortion counts in the screening questionnaire
+
+```{r univariate-EDA}
+
+(extortion_dist <- victim_table(enve_test$extortions))
+
+victim_table(enve_test$extortions, print_option = "pandoc")
+
+(ext_cummulative <- victim_cumulative(extortion_dist))
+
+kable(ext_cummulative, format = "pandoc", digits = 3)
+
+```
+
+```{r extortions1-lorenz}
+
+victim_lorenz("extortions", data = enve_test, family = "poisson")
+
+```
+
+Now do some MC gini tests, Index of dispersion tests, and KS tests
+
+```{r extortions1-tests}
+
+mc_gini_test("extortions", enve_test, family = "poisson", plots = TRUE)
+
+my_ks_test("extortions", enve_test)
+
+
+MASS::fitdistr(enve_test$extortions, "Negative Binomial")
+
+```
+
+# Models
+
+Reproduce the models presented in the submitted manuscript. (use subsector_safe)
+
+- Null vs Full
+- MNB (MTNB) vs MPoisson (MTP)
+- 
+
+Calculate VIFs.
+
+Post-hoc robustness checks:
+- Checking for outliers
+  - Option one, cap extortions at 10
+  - Option two, exclude incidents that suffered more than 10 extortions
+  - Option three, bootstrap (100 reps?)
+  - Option four, try MCMC??? (post-hoc check on admb objects, or try MCMCglmm package)
+
+
+To avoid any problems with NA values that may lead to non-convergence, work with a data set onf only the relevant variables.
+
+```{r model-data-frame}
+
+enve_test %>%
+    dplyr::select(extortions,
+           bribes,
+           yearsquant,
+           subsector = subsector_safe,
+           size,
+           bribes_abvic,
+           drogas,
+           armas,
+           Derecho,
+           General,
+           poblacion,
+           N,
+           state = NOM_ABR) -> enve_model
+
+#### JUST FOR THIS TESTING EXERCISE, ADD MORE VICTIMS TO THE OTHER, MEDIA, and mining categories
+
+##### Comment out before sending #####
+
+enve_model$extortions[which(enve_model$subsector == "Other")] <- rpois(10,1)
+
+
+enve_model$extortions[which(enve_model$subsector == "Media")] <- rpois(45, 0.5)
+
+enve_model$extortions[which(enve_model$subsector == "Mining")] <- rpois(30, 1)
+##### Comment out before sending #####
+
+##### Return to normal
+
+
+summary(enve_model)
+
+length(enve_model[is.na(enve_model)])
+
+
+```
+
+Perhaps best not to use the failsafe function. Use previous results from revision 2017 to judge feasibility of glmmadmb
+
+
+```{r model-failsafe-functions}
+
+# model_failsafe <- function(formula, data, family, ndi = 60000, ...)
+# {
+#     model <- tryCatch(glmmADMB::glmmadmb(formula = formula,
+#                                 data = data,
+#                                 family = family,
+#                                 zeroInflation = FALSE, 
+#                                 ...,
+#                                 admb.opts = glmmADMB::admbControl(noinit = FALSE, shess=FALSE),
+#                                 extra.args = paste0("-ndi", ndi)), 
+#                       error = function(e)
+#                           {
+#                           print("glmmADMB failed")
+#                           print(e)
+#                           e
+#                           })
+#     
+#     #tc <- tryCatch(summary(model), error = function(e) e)
+#     
+#     if(is(model, "error"))
+#     {
+#         print("glmmADMB failed, trying fit with glmmTMB")
+#       
+#        if(family == "nbinom")
+#           {
+#             family <- "nbinom2"
+#           }
+#        if(family == "truncnbinom")
+#           {
+#             family <- "truncated_nbinom2"
+#           }
+#           
+#       model <- tryCatch(glmmTMB(formula = formula,
+#                                 data = data,
+#                                 family = family),
+#                           error = function(e) e)
+#         if(is(model, "error"))
+#         {
+#             print(model)
+#             print("Second attempt also failed")
+#         }
+#     }
+#     else {print("The model was fitted correctly with glmmadmb")}
+#     
+#     return(model)
+# }
+
+```
+
+
+```{r main-formula}
+
+count_formula <- extortions ~
+                            bribes +
+                            yearsquant +
+                            subsector +
+                            size +
+                            mylog(bribes_abvic, mean_bribes) +
+                            mylog(armas, mean_armas) +
+                            mylog(drogas, mean_drogas) +
+                            mylog(N, mean_N) +
+                            mylog(poblacion, mean_poblacion) +
+                            scale(General, mean_General, FALSE) +
+                            scale(Derecho, mean_Derecho, FALSE) +
+                            (1 | state)
+
+```
+
+
+```{r multilevel-negative-binomial}
+
+
+mnb1 <- glmmadmb(formula = count_formula,
+                 data = enve_model,
+                 family = "nbinom", 
+                 zeroInflation = FALSE,
+                 admb.opts = glmmADMB::admbControl(noinit = FALSE, shess=FALSE),
+                 extra.args = "-ndi 60000")
+
+summary(mnb1)
+confint(mnb1)
+
+coef_csv(mnb1)
+
+get_glmmadmb(mnb1)
+
+# vs Poisson
+
+mp1 <- update(mnb1, family = "poisson")
+
+summary(mp1)
+confint(mp1)
+
+get_glmmadmb(mp1)
+
+lrtest(mp1, mnb1)
+
+# vs single level nb
+
+nb1 <- update(mnb1, . ~ . - (1 | state))
+
+
+summary(nb1)
+confint(nb1)
+
+get_glmmadmb(nb1)
+
+lrtest(nb1, mnb1)
+
+vif <- car::vif
+
+vif(mnb1)
+
+lm1 <- lm(update(count_formula, . ~ . - (1 | state)), data = enve_model)
+
+summary(lm1)
+
+vif(lm1)
+
+# NB null, multi and one level
+
+nb_null <- update(nb1, . ~ 1)
+
+summary(nb_null)
+get_glmmadmb(nb_null)
+
+lrtest(nb_null, nb1)
+
+lrtest(nb_null, mnb1)
+
+mnb_null <- update(nb_null, . ~ (1 | state))
+
+summary(mnb_null)
+get_glmmadmb(mnb_null)
+
+lrtest(nb_null, mnb_null)
+
+lrtest(mnb_null, mnb1)
+
+
+```
+
+The above should be equal to the MNB results reported in the manuscript.
+
+Now, do post-hoc robustness checks:
+- Checking for outliers
+  - Option one, cap extortions at 10
+  - Option two, exclude incidents that suffered more than 10 extortions
+  - Option three, bootstrap (500 reps)
+  - Option four, try MCMC??? (post-hoc check on admb objects, or try MCMCglmm package)
+
+
+
+
+```{r bootstrap-function}
+
+# use parLapply instead of mclapply
+
+boot_model <- function(model, reps, data, cores = detectCores()){
+  # set cores for parallel processing
+  if(.Platform$OS.type == "windows") {
+  cores <- makeCluster(cores)
+  }
+  
+  # Export required objects to parLapply
+  if(!is.integer(cores)){
+    message("cores not an integer")
+    
+    # Export model to cluster
+    mname <- deparse(substitute(model))
+    clusterExport(cores, list(mname, 
+                              "mylog", 
+                              "mkbin",
+                              "mean_bribes",
+                              "mean_armas",
+                              "mean_drogas",
+                              "mean_poblacion",
+                              "mean_N",
+                              "mean_General",
+                              "mean_Derecho"))
+    
+    # Load glmmADMB in cluster
+    clusterEvalQ(cores, library(glmmADMB))
+    clusterSetRNGStream(cores, iseed = 42)
+  }
+  
+  
+  # generate data replicates
+  n <- nrow(data)
+  data_boot <- replicate(reps, data[sample(1:n, n, replace = TRUE),], simplify = FALSE)
+
+  models <- pblapply(data_boot, function(x){
+    tryCatch(
+      update(model, data = x),
+      error = function(e) NULL
+      )
+  }, cl = cores)
+  
+  rslts <- list(observed = model, estimated_boot = models)
+  
+  # Stop cluster
+  if(!is.integer(cores)){
+    message("stopping cluster")
+    stopCluster(cores)  
+  }
+  
+  class(rslts) <- c("myboot", class(rslts))
+  return(rslts)
+}
+
+# Write helper functions to extract myboot objects
+coef.myboot <- function(myboot_obj){
+  obj <- myboot_obj$estimated_boot
+  obj <- obj[!sapply(obj, is.null)]
+  obj_coefs <- sapply(obj, function(x) coef(x))
+  # obj_coefs <- lapply(obj, function(x) coef(x))
+  # obj_coefs <- unnest(obj_coefs)
+  # print(obj_coefs)
+  
+  # add alpha
+  alphas <- sapply(obj, function(x){
+    a <- 1/x$alpha
+    if(length(a) == 0){
+      a <- NA
+    }
+    a
+    })
+  if(!all(is.na(alphas))){
+    obj_coefs <- rbind(obj_coefs, "alpha" = alphas)
+  }
+  
+  # Var_j
+  if(!is.null(myboot_obj$observed$random)){
+    vars_j <- sapply(obj, function(x) as.numeric(x$S))
+    obj_coefs <- rbind(obj_coefs, "var_j" = vars_j)
+  }
+  
+  return(obj_coefs)
+}
+
+obs_boot <- function(myboot_obj){
+  if(!"myboot" %in% class(myboot_obj)){
+    stop("This is not a myboot object")
+  }
+  
+  obs <- myboot_obj$observed
+  coefs <- coef(obs)
+  
+  alpha <- 1/obs$alpha
+  if(length(alpha) != 0){
+    coefs <- c(coefs, "alpha" = alpha)
+  }
+
+  if(!is.null(obs$random)){
+    var_j <- as.numeric(obs$S)
+    names(var_j) <- "var_j"
+    coefs <- c(coefs, var_j)
+  }
+  
+  coefs_mat <- matrix(coefs)
+  row.names(coefs_mat) <- names(coefs)
+
+  return(coefs_mat)
+}
+
+
+confint.myboot <- function(myboot_obj,
+                           sig = 0.95,
+                           type = c("perc", "bc")){
+  
+  # extract coefs
+  coefs <- coef(myboot_obj)
+  
+  # alpha level
+  a <- (1-sig)/2
+  a <- c(a, 1-a)
+  
+  # Observed values
+  obs <- obs_boot(myboot_obj)
+  
+  # Replicates
+  R <- ncol(coefs)
+  
+  # Terms
+  terms <- nrow(coefs)
+  
+  # Percent
+  if(type[1] == "perc"){
+    p <- a
+    ci <- apply(coefs, 1, quantile, probs = p)
+    ci <- t(ci)
+  }
+  
+  # bias-corrected
+  if(type[1] == "bc"){
+    b <- sapply(1:terms, function(x) qnorm(sum(coefs[x,] < obs[x,])/R))
+    z <- qnorm(a)
+    p_l <- pnorm(z[1]-2*b)
+    p_h <- pnorm(z[2]-2*b)
+    pm <- cbind(p_l, p_h)
+    ci <-sapply(1:terms, function(x) quantile(coefs[x,], probs = pm[x,]))
+    rownames(ci) <- c("BC 2.5%", "BC 97.5%")
+    colnames(ci) <- rownames(coefs)
+    
+    # Bias corrected estimate
+    boot_mean <- sapply(1:terms, function(x) mean(coefs[x,]))
+    bcm <- cbind(2*obs - boot_mean)
+    colnames(bcm) <- "BC Estimate"
+    ci <- cbind(bcm, t(ci))
+  }
+  
+  # return ci
+  return(ci)
+}
+
+summary.myboot <- function(myboot_obj, sig = 0.95){
+  obs <- obs_boot(myboot_obj)
+  coefs <- coef(myboot_obj)
+  se_boot <- apply(coefs, 1, sd, na.rm = TRUE)
+  ci_perc <- confint(myboot_obj, sig)
+  ci_bc <- confint(myboot_obj, sig, type = "bc")
+  message(paste0("Valid bootstrap replicates: ", ncol(coefs)))
+  z <- obs/se_boot
+  p <-  pnorm(-abs(z))
+  rslts <- cbind(Estimate = obs, SE = se_boot,  z, p, ci_perc, ci_bc)
+  colnames(rslts)[c(1, 3:4)] <- c("Estimate", "Z-score", "p-value")
+  return(rslts)
+}
+
+
+
+# Plot method to generate a ridge forest plot
+# 
+# Save coef.myboot object to facilitate plotting of BS distributions
+
+# save csv method for summary.myboot
+
+coef_csv_boot <- function(myboot_obj, dir = "coef_results/"){
+    if("myboot" %in% class(myboot_obj)){
+      mat <- summary(myboot_obj)
+    } else{
+      stop("This is not a myboot object")
+    }
+  
+    mname <- deparse(substitute(myboot_obj))
+
+    filename <- paste0(dir, mname, ".csv")
+
+    write.csv(mat, file = filename)
+
+    message("\nFile: '", filename, "' successfully writen!\n")
+
+}
+
+
+```
+
+
+Calculate bootstrap SE and CIs for mnb1
+
+```{r boot-mnb1}
+
+boot_r <- 5
+
+mnb1_boot <- boot_model(mnb1, boot_r, enve_model)
+
+summary(mnb1_boot)
+
+coef_csv_boot(mnb1_boot)
+
+write.csv(coef(mnb1_boot), file = "coef_results/mnb1_boot_reps.csv")
+
+```
+
+
+## Logit model
+
+
+
+```{r multilevel-logit}
+
+
+mlogit1 <- update(mnb1, mkbin(extortions) ~ ., 
+                  family = "binomial")
+
+summary(mlogit1)
+confint(mlogit1)
+
+coef_csv(mlogit1)
+
+get_glmmadmb(mlogit1)
+
+# vs single level logit
+
+logit1 <- update(mlogit1, . ~ . - (1 | state))
+
+
+summary(logit1)
+confint(logit1)
+
+get_glmmadmb(logit1)
+
+lrtest(logit1, mlogit1)
+
+# logit null, multi and one level
+
+logit_null <- update(logit1, . ~ 1)
+
+summary(logit_null)
+get_glmmadmb(logit_null)
+
+lrtest(logit_null, logit1)
+
+lrtest(logit_null, mlogit1)
+
+mlogit_null <- update(logit_null, . ~ (1 | state))
+
+summary(mlogit_null)
+get_glmmadmb(mlogit_null)
+
+lrtest(logit_null, mlogit_null)
+
+lrtest(mlogit_null, mlogit1)
+
+
+```
+
+Bootstrap mlogit1
+
+
+```{r boot-mlogit}
+
+mlogit1_boot <- boot_model(mlogit1, boot_r, enve_model)
+
+summary(mlogit1_boot)
+
+coef_csv_boot(mlogit1_boot)
+
+write.csv(coef(mlogit1_boot), file = "coef_results/mlogit1_boot_reps.csv")
+
+```
+
+# Truncated models
+
+
+
+```{r multilevel-truncated-model}
+
+# Truncated data
+
+enve_model %>%
+  filter(extortions > 0) -> t_enve_model
+
+mtnb1 <- glmmadmb(formula = count_formula,
+                 data = t_enve_model,
+                 family = "truncnbinom", 
+                 zeroInflation = FALSE,
+                 admb.opts = glmmADMB::admbControl(noinit = FALSE, shess=FALSE),
+                 extra.args = "-ndi 60000")
+
+summary(mtnb1)
+confint(mtnb1)
+
+coef_csv(mtnb1)
+
+get_glmmadmb(mtnb1)
+
+# vs Poisson
+
+mtp1 <- update(mtnb1, family = "truncpoiss")
+
+summary(mtp1)
+confint(mtp1)
+
+get_glmmadmb(mtp1)
+
+lrtest(mtp1, mtnb1)
+
+# vs single level nb
+
+tnb1 <- update(mtnb1, . ~ . - (1 | state))
+
+
+summary(tnb1)
+confint(tnb1)
+
+get_glmmadmb(tnb1)
+
+lrtest(tnb1, mtnb1)
+
+vif(mtnb1)
+
+tlm1 <- lm(update(count_formula, . ~ . - (1 | state)), data = t_enve_model)
+
+summary(tlm1)
+
+vif(tlm1)
+
+# NB null, multi and one level
+
+tnb_null <- update(tnb1, . ~ 1)
+
+summary(tnb_null)
+get_glmmadmb(tnb_null)
+
+lrtest(tnb_null, tnb1)
+
+lrtest(tnb_null, mtnb1)
+
+mtnb_null <- update(tnb_null, . ~ (1 | state))
+
+summary(mtnb_null)
+get_glmmadmb(mtnb_null)
+
+lrtest(tnb_null, mtnb_null)
+
+lrtest(mtnb_null, mtnb1)
+
+
+```
+
+Calculate bootstrap SE and CIs for mtnb1
+
+```{r boot-mtnb1}
+
+mtnb1_boot <- boot_model(mtnb1, boot_r, t_enve_model)
+
+coef(mtnb1_boot)
+
+summary(mtnb1_boot)
+
+coef_csv_boot(mtnb1_boot)
+
+write.csv(coef(mtnb1_boot), file = "coef_results/mtnb1_boot_reps.csv")
+
+```
+
+
+# Outlier check
+
+Check which are the observations with outliers, what are their characteristics.
+
+Drop outliers as a sanity check.
+  - Exclude observations that suffered 30 or more extortions
+  - Cap observations that are greater than 10 at 10 (ugh)
+  
+Dropping "outliers" first.
+  
+```{r drop-less-than-30}
+
+enve_model %>%
+  filter(extortions < 30) -> enve_drop
+
+
+mnb1_drop <- glmmadmb(formula = count_formula,
+                 data = enve_drop,
+                 family = "nbinom", 
+                 zeroInflation = FALSE,
+                 admb.opts = glmmADMB::admbControl(noinit = FALSE, shess=FALSE),
+                 extra.args = "-ndi 60000")
+
+summary(mnb1_drop)
+confint(mnb1_drop)
+
+coef_csv(mnb1_drop)
+
+get_glmmadmb(mnb1_drop)
+
+vif(mnb1_drop)
+
+# vs Poisson
+
+mp1_drop <- update(mnb1_drop, family = "poisson")
+
+summary(mp1_drop)
+confint(mp1_drop)
+
+get_glmmadmb(mp1_drop)
+
+lrtest(mp1_drop, mnb1_drop)
+
+# vs single level nb
+
+nb1_drop <- update(mnb1_drop, . ~ . - (1 | state))
+
+
+summary(nb1_drop)
+confint(nb1_drop)
+
+get_glmmadmb(nb1_drop)
+
+lrtest(nb1_drop, mnb1_drop)
+
+# NB null, multi and one level
+
+nb_null_drop <- update(nb1_drop, . ~ 1)
+
+summary(nb_null_drop)
+get_glmmadmb(nb_null_drop)
+
+lrtest(nb_null_drop, nb1_drop)
+
+lrtest(nb_null_drop, mnb1_drop)
+
+mnb_null_drop <- update(nb_null_drop, . ~ (1 | state))
+
+summary(mnb_null_drop)
+get_glmmadmb(mnb_null_drop)
+
+lrtest(nb_null_drop, mnb_null_drop)
+
+lrtest(mnb_null_drop, mnb1_drop)
+
+## Logit
+
+mlogit1_drop <- update(mnb1_drop, mkbin(extortions) ~ ., 
+                  family = "binomial")
+
+summary(mlogit1_drop)
+confint(mlogit1_drop)
+
+coef_csv(mlogit1_drop)
+
+get_glmmadmb(mlogit1_drop)
+
+# vs single level logit
+
+logit1_drop <- update(mlogit1_drop, . ~ . - (1 | state))
+
+
+summary(logit1_drop)
+confint(logit1_drop)
+
+get_glmmadmb(logit1_drop)
+
+lrtest(logit1_drop, mlogit1_drop)
+
+# logit null, multi and one level
+
+logit_null_drop <- update(logit1_drop, . ~ 1)
+
+summary(logit_null_drop)
+get_glmmadmb(logit_null_drop)
+
+lrtest(logit_null_drop, logit1_drop)
+
+lrtest(logit_null_drop, mlogit1_drop)
+
+mlogit_null_drop <- update(logit_null_drop, . ~ (1 | state))
+
+summary(mlogit_null_drop)
+get_glmmadmb(mlogit_null_drop)
+
+lrtest(logit_null_drop, mlogit_null_drop)
+
+lrtest(mlogit_null_drop, mlogit1_drop)
+
+
+# Truncated data
+
+mtnb1_drop <- glmmadmb(formula = count_formula,
+                 data = filter(enve_drop, extortions > 0),
+                 family = "truncnbinom", 
+                 zeroInflation = FALSE,
+                 admb.opts = glmmADMB::admbControl(noinit = FALSE, shess=FALSE),
+                 extra.args = "-ndi 60000")
+
+summary(mtnb1_drop)
+confint(mtnb1_drop)
+
+coef_csv(mtnb1_drop)
+
+get_glmmadmb(mtnb1_drop)
+
+# vs Poisson
+
+mtp1_drop <- update(mtnb1_drop, family = "truncpoiss")
+
+summary(mtp1_drop)
+confint(mtp1_drop)
+
+get_glmmadmb(mtp1_drop)
+
+lrtest(mtp1_drop, mtnb1_drop)
+
+# vs single level nb
+
+tnb1_drop <- update(mtnb1_drop, . ~ . - (1 | state))
+
+
+summary(tnb1_drop)
+confint(tnb1_drop)
+
+get_glmmadmb(tnb1_drop)
+
+lrtest(tnb1_drop, mtnb1_drop)
+
+vif(mtnb1_drop)
+
+# NB null, multi and one level
+
+tnb_null_drop <- update(tnb1_drop, . ~ 1)
+
+summary(tnb_null_drop)
+get_glmmadmb(tnb_null_drop)
+
+lrtest(tnb_null_drop, tnb1_drop)
+
+lrtest(tnb_null_drop, mtnb1_drop)
+
+mtnb_null_drop <- update(tnb_null_drop, . ~ (1 | state))
+
+summary(mtnb_null_drop)
+get_glmmadmb(mtnb_null_drop)
+
+lrtest(tnb_null_drop, mtnb_null_drop)
+
+lrtest(mtnb_null_drop, mtnb1_drop)
+
+
+```
+
+
+
+Capping extortions at 10
+
+
+```{r capped-extortions}
+
+enve_model %>%
+  mutate(extortions = ifelse(extortions > 10, 10, extortions)) -> enve_capped
+
+mnb1_capped <- glmmadmb(formula = count_formula,
+                 data = enve_capped,
+                 family = "nbinom", 
+                 zeroInflation = FALSE,
+                 admb.opts = glmmADMB::admbControl(noinit = FALSE, shess=FALSE),
+                 extra.args = "-ndi 60000")
+
+summary(mnb1_capped)
+confint(mnb1_capped)
+
+coef_csv(mnb1_capped)
+
+get_glmmadmb(mnb1_capped)
+
+vif(mnb1_capped)
+
+# vs Poisson
+
+mp1_capped <- update(mnb1_capped, family = "poisson")
+
+summary(mp1_capped)
+confint(mp1_capped)
+
+get_glmmadmb(mp1_capped)
+
+lrtest(mp1_capped, mnb1_capped)
+
+# vs single level nb
+
+nb1_capped <- update(mnb1_capped, . ~ . - (1 | state))
+
+
+summary(nb1_capped)
+confint(nb1_capped)
+
+get_glmmadmb(nb1_capped)
+
+lrtest(nb1_capped, mnb1_capped)
+
+# NB null, multi and one level
+
+nb_null_capped <- update(nb1_capped, . ~ 1)
+
+summary(nb_null_capped)
+get_glmmadmb(nb_null_capped)
+
+lrtest(nb_null_capped, nb1_capped)
+
+lrtest(nb_null_capped, mnb1_capped)
+
+mnb_null_capped <- update(nb_null_capped, . ~ (1 | state))
+
+summary(mnb_null_capped)
+get_glmmadmb(mnb_null_capped)
+
+lrtest(nb_null_capped, mnb_null_capped)
+
+lrtest(mnb_null_capped, mnb1_capped)
+
+
+# Truncated data
+
+mtnb1_capped <- glmmadmb(formula = count_formula,
+                 data = filter(enve_capped, extortions > 0),
+                 family = "truncnbinom", 
+                 zeroInflation = FALSE,
+                 admb.opts = glmmADMB::admbControl(noinit = FALSE, shess=FALSE),
+                 extra.args = "-ndi 60000")
+
+summary(mtnb1_capped)
+confint(mtnb1_capped)
+
+coef_csv(mtnb1_capped)
+
+get_glmmadmb(mtnb1_capped)
+
+# vs Poisson
+
+mtp1_capped <- update(mtnb1_capped, family = "truncpoiss")
+
+summary(mtp1_capped)
+confint(mtp1_capped)
+
+get_glmmadmb(mtp1_capped)
+
+lrtest(mtp1_capped, mtnb1_capped)
+
+# vs single level nb
+
+tnb1_capped <- update(mtnb1_capped, . ~ . - (1 | state))
+
+
+summary(tnb1_capped)
+confint(tnb1_capped)
+
+get_glmmadmb(tnb1_capped)
+
+lrtest(tnb1_capped, mtnb1_capped)
+
+vif(mtnb1_capped)
+
+# NB null, multi and one level
+
+tnb_null_capped <- update(tnb1_capped, . ~ 1)
+
+summary(tnb_null_capped)
+get_glmmadmb(tnb_null_capped)
+
+lrtest(tnb_null_capped, tnb1_capped)
+
+lrtest(tnb_null_capped, mtnb1_capped)
+
+mtnb_null_capped <- update(tnb_null_capped, . ~ (1 | state))
+
+summary(mtnb_null_capped)
+get_glmmadmb(mtnb_null_capped)
+
+lrtest(tnb_null_capped, mtnb_null_capped)
+
+lrtest(mtnb_null_capped, mtnb1_capped)
+
+
+```
+
+# The end
+
+```{r end}
+date()
+endtime <- proc.time()
+
+endtime - starttime
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,19 @@
+packages <- c("devtools",
+              "foreign",
+              "tidyverse",
+              "Cairo",
+              "knitr",
+              "lazyeval",
+              "RCurl",
+              "classInt",
+              "reshape2",
+              "lmtest",
+              "car",
+              "downloader",
+              "coda",
+              "R2admb",
+              "dgof",
+              "victim",
+              "glmmADMB"
+              "pbapply"
+          )

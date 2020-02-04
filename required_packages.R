@@ -4,7 +4,6 @@ packages <- c("devtools",
               "Cairo",
               "knitr",
               "lazyeval",
-              "RCurl",
               "classInt",
               "reshape2",
               "lmtest",
@@ -14,6 +13,6 @@ packages <- c("devtools",
               "R2admb",
               "dgof",
               "victim",
-              "glmmADMB"
+              "glmmADMB",
               "pbapply"
           )

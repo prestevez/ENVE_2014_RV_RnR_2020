@@ -1,8 +1,8 @@
 ---
-title: | 
+title: |
   Are repeatedly extorted businesses different? A multilevel hurdle model of extortion
   victimization: RnR analyses
-author: 
+author:
   - "Patricio R. Estévez Soto"
   - "Shane D. Johnson"
   - "Nick Tilley"
@@ -182,7 +182,7 @@ We first load and arrange the area and victim level data.
 As the script is designed to be run remotely, when working locally during development, testing data needs to be downloaded from github. To download the testing data, the script uses an Rmarkdown parameter (`params$test`). The parameter is set to `FALSE` by default, so that it runs seamlessly using the `render` command when running in the remote research settings. For running correctly in a testing setting, the parameter must be given a `TRUE` value when running the knit command (`rmarkdown::render('ENVE_rv_ext_type.Rmd', params = list(test = TRUE))`). When using `knitr`, no parameter is passed, so the following gives an error. This is expected behaviour.
 
 ```{r testing}
-#params <- list(test = TRUE)
+params <- list(test = TRUE)
 if(params$test){
     download("https://raw.githubusercontent.com/prestevez/datahouse/master/enve2014cuest_ciega_2014.dbf",
                       destfile = "enve2014cuest_ciega_2014.dbf", mode = "wb")
@@ -424,7 +424,7 @@ Reproduce the models presented in the submitted manuscript. (use subsector_safe)
 
 - Null vs Full
 - MNB (MTNB) vs MPoisson (MTP)
-- 
+-
 
 Calculate VIFs.
 
@@ -487,23 +487,23 @@ Perhaps best not to use the failsafe function. Use previous results from revisio
 #     model <- tryCatch(glmmADMB::glmmadmb(formula = formula,
 #                                 data = data,
 #                                 family = family,
-#                                 zeroInflation = FALSE, 
+#                                 zeroInflation = FALSE,
 #                                 ...,
 #                                 admb.opts = glmmADMB::admbControl(noinit = FALSE, shess=FALSE),
-#                                 extra.args = paste0("-ndi", ndi)), 
+#                                 extra.args = paste0("-ndi", ndi)),
 #                       error = function(e)
 #                           {
 #                           print("glmmADMB failed")
 #                           print(e)
 #                           e
 #                           })
-#     
+#
 #     #tc <- tryCatch(summary(model), error = function(e) e)
-#     
+#
 #     if(is(model, "error"))
 #     {
 #         print("glmmADMB failed, trying fit with glmmTMB")
-#       
+#
 #        if(family == "nbinom")
 #           {
 #             family <- "nbinom2"
@@ -512,7 +512,7 @@ Perhaps best not to use the failsafe function. Use previous results from revisio
 #           {
 #             family <- "truncated_nbinom2"
 #           }
-#           
+#
 #       model <- tryCatch(glmmTMB(formula = formula,
 #                                 data = data,
 #                                 family = family),
@@ -524,7 +524,7 @@ Perhaps best not to use the failsafe function. Use previous results from revisio
 #         }
 #     }
 #     else {print("The model was fitted correctly with glmmadmb")}
-#     
+#
 #     return(model)
 # }
 
@@ -555,7 +555,7 @@ count_formula <- extortions ~
 
 mnb1 <- glmmadmb(formula = count_formula,
                  data = enve_model,
-                 family = "nbinom", 
+                 family = "nbinom",
                  zeroInflation = FALSE,
                  admb.opts = glmmADMB::admbControl(noinit = FALSE, shess=FALSE),
                  extra.args = "-ndi 60000")
@@ -644,15 +644,15 @@ boot_model <- function(model, reps, data, cores = detectCores()){
   if(.Platform$OS.type == "windows") {
   cores <- makeCluster(cores)
   }
-  
+
   # Export required objects to parLapply
   if(!is.integer(cores)){
     message("cores not an integer")
-    
+
     # Export model to cluster
     mname <- deparse(substitute(model))
-    clusterExport(cores, list(mname, 
-                              "mylog", 
+    clusterExport(cores, list(mname,
+                              "mylog",
                               "mkbin",
                               "mean_bribes",
                               "mean_armas",
@@ -661,13 +661,13 @@ boot_model <- function(model, reps, data, cores = detectCores()){
                               "mean_N",
                               "mean_General",
                               "mean_Derecho"))
-    
+
     # Load glmmADMB in cluster
     clusterEvalQ(cores, library(glmmADMB))
     clusterSetRNGStream(cores, iseed = 42)
   }
-  
-  
+
+
   # generate data replicates
   n <- nrow(data)
   data_boot <- replicate(reps, data[sample(1:n, n, replace = TRUE),], simplify = FALSE)
@@ -678,15 +678,15 @@ boot_model <- function(model, reps, data, cores = detectCores()){
       error = function(e) NULL
       )
   }, cl = cores)
-  
+
   rslts <- list(observed = model, estimated_boot = models)
-  
+
   # Stop cluster
   if(!is.integer(cores)){
     message("stopping cluster")
-    stopCluster(cores)  
+    stopCluster(cores)
   }
-  
+
   class(rslts) <- c("myboot", class(rslts))
   return(rslts)
 }
@@ -699,7 +699,7 @@ coef.myboot <- function(myboot_obj){
   # obj_coefs <- lapply(obj, function(x) coef(x))
   # obj_coefs <- unnest(obj_coefs)
   # print(obj_coefs)
-  
+
   # add alpha
   alphas <- sapply(obj, function(x){
     a <- 1/x$alpha
@@ -711,13 +711,13 @@ coef.myboot <- function(myboot_obj){
   if(!all(is.na(alphas))){
     obj_coefs <- rbind(obj_coefs, "alpha" = alphas)
   }
-  
+
   # Var_j
   if(!is.null(myboot_obj$observed$random)){
     vars_j <- sapply(obj, function(x) as.numeric(x$S))
     obj_coefs <- rbind(obj_coefs, "var_j" = vars_j)
   }
-  
+
   return(obj_coefs)
 }
 
@@ -725,10 +725,10 @@ obs_boot <- function(myboot_obj){
   if(!"myboot" %in% class(myboot_obj)){
     stop("This is not a myboot object")
   }
-  
+
   obs <- myboot_obj$observed
   coefs <- coef(obs)
-  
+
   alpha <- 1/obs$alpha
   if(length(alpha) != 0){
     coefs <- c(coefs, "alpha" = alpha)
@@ -739,7 +739,7 @@ obs_boot <- function(myboot_obj){
     names(var_j) <- "var_j"
     coefs <- c(coefs, var_j)
   }
-  
+
   coefs_mat <- matrix(coefs)
   row.names(coefs_mat) <- names(coefs)
 
@@ -750,30 +750,30 @@ obs_boot <- function(myboot_obj){
 confint.myboot <- function(myboot_obj,
                            sig = 0.95,
                            type = c("perc", "bc")){
-  
+
   # extract coefs
   coefs <- coef(myboot_obj)
-  
+
   # alpha level
   a <- (1-sig)/2
   a <- c(a, 1-a)
-  
+
   # Observed values
   obs <- obs_boot(myboot_obj)
-  
+
   # Replicates
   R <- ncol(coefs)
-  
+
   # Terms
   terms <- nrow(coefs)
-  
+
   # Percent
   if(type[1] == "perc"){
     p <- a
     ci <- apply(coefs, 1, quantile, probs = p)
     ci <- t(ci)
   }
-  
+
   # bias-corrected
   if(type[1] == "bc"){
     b <- sapply(1:terms, function(x) qnorm(sum(coefs[x,] < obs[x,])/R))
@@ -784,14 +784,14 @@ confint.myboot <- function(myboot_obj,
     ci <-sapply(1:terms, function(x) quantile(coefs[x,], probs = pm[x,]))
     rownames(ci) <- c("BC 2.5%", "BC 97.5%")
     colnames(ci) <- rownames(coefs)
-    
+
     # Bias corrected estimate
     boot_mean <- sapply(1:terms, function(x) mean(coefs[x,]))
     bcm <- cbind(2*obs - boot_mean)
     colnames(bcm) <- "BC Estimate"
     ci <- cbind(bcm, t(ci))
   }
-  
+
   # return ci
   return(ci)
 }
@@ -813,7 +813,7 @@ summary.myboot <- function(myboot_obj, sig = 0.95){
 
 
 # Plot method to generate a ridge forest plot
-# 
+#
 # Save coef.myboot object to facilitate plotting of BS distributions
 
 # save csv method for summary.myboot
@@ -824,7 +824,7 @@ coef_csv_boot <- function(myboot_obj, dir = "coef_results/"){
     } else{
       stop("This is not a myboot object")
     }
-  
+
     mname <- deparse(substitute(myboot_obj))
 
     filename <- paste0(dir, mname, ".csv")
@@ -863,7 +863,7 @@ write.csv(coef(mnb1_boot), file = "coef_results/mnb1_boot_reps.csv")
 ```{r multilevel-logit}
 
 
-mlogit1 <- update(mnb1, mkbin(extortions) ~ ., 
+mlogit1 <- update(mnb1, mkbin(extortions) ~ .,
                   family = "binomial")
 
 summary(mlogit1)
@@ -936,7 +936,7 @@ enve_model %>%
 
 mtnb1 <- glmmadmb(formula = count_formula,
                  data = t_enve_model,
-                 family = "truncnbinom", 
+                 family = "truncnbinom",
                  zeroInflation = FALSE,
                  admb.opts = glmmADMB::admbControl(noinit = FALSE, shess=FALSE),
                  extra.args = "-ndi 60000")
@@ -1026,9 +1026,9 @@ Check which are the observations with outliers, what are their characteristics.
 Drop outliers as a sanity check.
   - Exclude observations that suffered 30 or more extortions
   - Cap observations that are greater than 10 at 10 (ugh)
-  
+
 Dropping "outliers" first.
-  
+
 ```{r drop-less-than-30}
 
 enve_model %>%
@@ -1037,7 +1037,7 @@ enve_model %>%
 
 mnb1_drop <- glmmadmb(formula = count_formula,
                  data = enve_drop,
-                 family = "nbinom", 
+                 family = "nbinom",
                  zeroInflation = FALSE,
                  admb.opts = glmmADMB::admbControl(noinit = FALSE, shess=FALSE),
                  extra.args = "-ndi 60000")
@@ -1096,7 +1096,7 @@ lrtest(mnb_null_drop, mnb1_drop)
 
 ## Logit
 
-mlogit1_drop <- update(mnb1_drop, mkbin(extortions) ~ ., 
+mlogit1_drop <- update(mnb1_drop, mkbin(extortions) ~ .,
                   family = "binomial")
 
 summary(mlogit1_drop)
@@ -1143,7 +1143,7 @@ lrtest(mlogit_null_drop, mlogit1_drop)
 
 mtnb1_drop <- glmmadmb(formula = count_formula,
                  data = filter(enve_drop, extortions > 0),
-                 family = "truncnbinom", 
+                 family = "truncnbinom",
                  zeroInflation = FALSE,
                  admb.opts = glmmADMB::admbControl(noinit = FALSE, shess=FALSE),
                  extra.args = "-ndi 60000")
@@ -1215,7 +1215,7 @@ enve_model %>%
 
 mnb1_capped <- glmmadmb(formula = count_formula,
                  data = enve_capped,
-                 family = "nbinom", 
+                 family = "nbinom",
                  zeroInflation = FALSE,
                  admb.opts = glmmADMB::admbControl(noinit = FALSE, shess=FALSE),
                  extra.args = "-ndi 60000")
@@ -1277,7 +1277,7 @@ lrtest(mnb_null_capped, mnb1_capped)
 
 mtnb1_capped <- glmmadmb(formula = count_formula,
                  data = filter(enve_capped, extortions > 0),
-                 family = "truncnbinom", 
+                 family = "truncnbinom",
                  zeroInflation = FALSE,
                  admb.opts = glmmADMB::admbControl(noinit = FALSE, shess=FALSE),
                  extra.args = "-ndi 60000")
@@ -1345,32 +1345,3 @@ endtime <- proc.time()
 
 endtime - starttime
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

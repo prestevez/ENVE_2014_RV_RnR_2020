@@ -59,7 +59,7 @@ library(glmmADMB)
 # library(bbmle)
 # library(gridExtra)
 library(parallel)
-library(ggthemes)
+# library(ggthemes)
 
 # install.packages("pbapply")
 library(pbapply)
@@ -660,7 +660,8 @@ boot_model <- function(model, reps, data, cores = detectCores()){
                               "mean_poblacion",
                               "mean_N",
                               "mean_General",
-                              "mean_Derecho"))
+                              "mean_Derecho",
+                              "count_formula"))
 
     # Load glmmADMB in cluster
     clusterEvalQ(cores, library(glmmADMB))
@@ -847,6 +848,7 @@ boot_r <- 5
 
 mnb1_boot <- boot_model(mnb1, boot_r, enve_model)
 
+
 summary(mnb1_boot)
 
 coef_csv_boot(mnb1_boot)
@@ -1007,8 +1009,6 @@ Calculate bootstrap SE and CIs for mtnb1
 ```{r boot-mtnb1}
 
 mtnb1_boot <- boot_model(mtnb1, boot_r, t_enve_model)
-
-coef(mtnb1_boot)
 
 summary(mtnb1_boot)
 

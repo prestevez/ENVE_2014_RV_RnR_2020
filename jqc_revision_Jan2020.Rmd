@@ -182,11 +182,11 @@ We first load and arrange the area and victim level data.
 As the script is designed to be run remotely, when working locally during development, testing data needs to be downloaded from github. To download the testing data, the script uses an Rmarkdown parameter (`params$test`). The parameter is set to `FALSE` by default, so that it runs seamlessly using the `render` command when running in the remote research settings. For running correctly in a testing setting, the parameter must be given a `TRUE` value when running the knit command (`rmarkdown::render('ENVE_rv_ext_type.Rmd', params = list(test = TRUE))`). When using `knitr`, no parameter is passed, so the following gives an error. This is expected behaviour.
 
 ```{r testing}
-params <- list(test = TRUE)
-if(params$test){
-    download("https://raw.githubusercontent.com/prestevez/datahouse/master/enve2014cuest_ciega_2014.dbf",
-                      destfile = "enve2014cuest_ciega_2014.dbf", mode = "wb")
-}
+# params <- list(test = TRUE)
+# if(params$test){
+#     download("https://raw.githubusercontent.com/prestevez/datahouse/master/enve2014cuest_ciega_2014.dbf",
+#                       destfile = "enve2014cuest_ciega_2014.dbf", mode = "wb")
+# }
 
 ```
 
@@ -455,17 +455,17 @@ enve_test %>%
            N,
            state = NOM_ABR) -> enve_model
 
-#### JUST FOR THIS TESTING EXERCISE, ADD MORE VICTIMS TO THE OTHER, MEDIA, and mining categories
-
-##### Comment out before sending #####
-
-enve_model$extortions[which(enve_model$subsector == "Other")] <- rpois(10,1)
-
-
-enve_model$extortions[which(enve_model$subsector == "Media")] <- rpois(45, 0.5)
-
-enve_model$extortions[which(enve_model$subsector == "Mining")] <- rpois(30, 1)
-##### Comment out before sending #####
+# #### JUST FOR THIS TESTING EXERCISE, ADD MORE VICTIMS TO THE OTHER, MEDIA, and mining categories
+# 
+# ##### Comment out before sending #####
+# 
+# enve_model$extortions[which(enve_model$subsector == "Other")] <- rpois(10,1)
+# 
+# 
+# enve_model$extortions[which(enve_model$subsector == "Media")] <- rpois(45, 0.5)
+# 
+# enve_model$extortions[which(enve_model$subsector == "Mining")] <- rpois(30, 1)
+# ##### Comment out before sending #####
 
 ##### Return to normal
 
@@ -844,7 +844,7 @@ Calculate bootstrap SE and CIs for mnb1
 
 ```{r boot-mnb1}
 
-boot_r <- 5
+boot_r <- 120
 
 mnb1_boot <- boot_model(mnb1, boot_r, enve_model)
 
